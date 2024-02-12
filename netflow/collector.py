@@ -16,13 +16,37 @@ import signal
 import socket
 import socketserver
 import threading
+from threading import Thread
 import time
+import os
+from datetime import datetime
 from collections import namedtuple
-
+import clickhouse_connect
 from netflow.ipfix import IPFIXTemplateNotRecognized
 from netflow.utils import UnknownExportVersion, parse_packet
 from netflow.v9 import V9TemplateNotRecognized
-
+campos = ["IPV4_SRC_ADDR",
+	"IPV4_DST_ADDR" ,
+	"IPV4_NEXT_HOP" ,
+	"BGP_IPV4_NEXT_HOP" ,
+	"IN_PKTS" ,
+	"IN_BYTES" ,
+	"FIRST_SWITCHED" ,
+	"LAST_SWITCHED" ,
+	"INPUT_SNMP" ,
+	"OUTPUT_SNMP" ,
+	"L4_SRC_PORT" ,
+	"L4_DST_PORT" ,
+	"SRC_AS" ,
+	"DST_AS" ,
+	"SRC_VLAN" ,
+	"DST_VLAN" ,
+	"TCP_FLAGS" ,
+	"PROTOCOL" ,
+    "SRC_TOS" ,
+	"SRC_MASK" ,
+	"DST_MASK" ,
+	"DIRECTION" ]
 RawPacket = namedtuple('RawPacket', ['ts', 'client', 'data'])
 ParsedPacket = namedtuple('ParsedPacket', ['ts', 'client', 'export'])
 
@@ -34,6 +58,15 @@ ch = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 ch.setFormatter(formatter)
 logger.addHandler(ch)
+
+def getn(q, n):
+    result = [q.get()]  # block until at least 1
+    try:  # add more until `q` is empty or `n` items obtained
+        while len(result) < n:
+            result.append(q.get(block=False))
+    except queue.Empty:
+        pass
+    return result
 
 
 class QueuingRequestHandler(socketserver.BaseRequestHandler):
@@ -87,15 +120,161 @@ class ThreadedNetFlowListener(threading.Thread):
     ...     listener.join()
     ...     print("Stopped!")
     """
+    def displayFlows(self):
+        while not self._shutdown.is_set():
+            os.system('cls' if os.name == 'nt' else 'clear')
+            print(datetime.now())
+            print("Pacotes ("+ str(self.export.qsize())+"):")
+            print("Erros: "+ str(self.erros.queue))
+            time.sleep(0.5)
+            # try:
+            #     p = self.export.get()
+            #     if p:
+            #         for f in p.export.flows:
+            #             if 'IPV4_SRC_ADDR' in f.data.keys():
+            #                 print("IPV4: "+ f.data['IPV4_SRC_ADDR'] + ">>" + f.data['IPV4_DST_ADDR'] + " via " + f.data['IPV4_NEXT_HOP'] )
+            #             else:
+            #                 print("IPV6: "+ f.data['IPV6_SRC_ADDR'] + ">>" + f.data['IPV6_DST_ADDR'] + " via " + f.data['IPV6_NEXT_HOP'] )
+            # except queue.Empty:
+            #     print("Fila vazia")
+         
+    def exportFlows(self):
+        while not self._shutdown.is_set():
+            # os.system('cls' if os.name == 'nt' else 'clear')
+            # print(datetime.now())
+            #print("Pacotes ("+ str(self.export.qsize())+"):")
+            #print("Erros: "+ str(self.error.queue))
+            try:
+                p = getn(self.export, 1000)
+                # rows =[]
+                # column_names=[]
+                if len(p) > 1 and p:
+                    for ts, client, export in p:
+                        rows =[]
+                        for f in export.flows:
+                            ts_total = export.header.timestamp + export.header.uptime
+                            #values = [datetime.fromtimestamp(ts) ,client[0], 4]
+                            if 'IPV4_SRC_ADDR' in f.data.keys():
+                                column_names=['TIMESTAMP', 'EXPORTER', 'IP_VERSION',
+                                        "IPV4_SRC_ADDR",
+	                                    "IPV4_DST_ADDR" ,
+	                                    "IPV4_NEXT_HOP" ,
+                                        "BGP_IPV4_NEXT_HOP" ,
+	                                    "IN_PKTS" ,
+	                                    "IN_BYTES" ,
+	                                    "FIRST_SWITCHED" ,
+	                                    "LAST_SWITCHED" ,
+	                                    "INPUT_SNMP" ,
+	                                    "OUTPUT_SNMP" ,
+	                                    "L4_SRC_PORT" ,
+	                                    "L4_DST_PORT" ,
+	                                    "SRC_AS" ,
+	                                    "DST_AS" ,
+	                                    "SRC_VLAN" ,
+	                                    "DST_VLAN" ,
+	                                    "TCP_FLAGS" ,
+	                                    "PROTOCOL" ,
+                                        "SRC_TOS" ,
+	                                    "SRC_MASK" ,
+	                                    "DST_MASK" ,
+	                                    "DIRECTION"]
+                                rows.append([datetime.fromtimestamp(ts),client[0],4,
+                                                f.data['IPV4_SRC_ADDR'],
+                                                f.data['IPV4_DST_ADDR'], 
+                                                f.data['IPV4_NEXT_HOP'],
+                                                f.data['BGP_IPV4_NEXT_HOP'],
+                                                f.data["IN_PKTS"],
+	                                            f.data["IN_BYTES"],
+	                                            datetime.fromtimestamp(f.data["FIRST_SWITCHED"]) ,
+	                                            datetime.fromtimestamp(f.data["LAST_SWITCHED"]) ,
+	                                            f.data["INPUT_SNMP"] ,
+	                                            f.data["OUTPUT_SNMP"] ,
+	                                            f.data["L4_SRC_PORT"] ,
+	                                            f.data["L4_DST_PORT"] ,
+	                                            f.data["SRC_AS"] ,
+	                                            f.data["DST_AS"] ,
+	                                            f.data["SRC_VLAN"] ,
+	                                            f.data["DST_VLAN"] ,
+	                                            f.data["TCP_FLAGS"] ,
+	                                            f.data["PROTOCOL"] ,
+                                                f.data["SRC_TOS"] ,
+	                                            f.data["SRC_MASK"] ,
+	                                            f.data["DST_MASK"] ,
+	                                            f.data["DIRECTION"]])
+                               #print("IPV4: "+ f.data['IPV4_SRC_ADDR'] + ">>" + f.data['IPV4_DST_ADDR'] + " via " + f.data['IPV4_NEXT_HOP'] )
+                                self.clickhouse_client.insert('raw_flows', rows, column_names)
+                            else:
+                                column_names=['TIMESTAMP', 'EXPORTER', 'IP_VERSION',
+                                        "IPV6_SRC_ADDR",
+	                                    "IPV6_DST_ADDR" ,
+	                                    "IPV6_NEXT_HOP" ,
+                                        #"BGP_IPV6_NEXT_HOP" ,
+	                                    "IN_PKTS" ,
+	                                    "IN_BYTES" ,
+	                                    "FIRST_SWITCHED" ,
+	                                    "LAST_SWITCHED" ,
+	                                    "INPUT_SNMP" ,
+	                                    "OUTPUT_SNMP" ,
+	                                    "L4_SRC_PORT" ,
+	                                    "L4_DST_PORT" ,
+	                                    "SRC_AS" ,
+	                                    "DST_AS" ,
+	                                    "SRC_VLAN" ,
+	                                    "DST_VLAN" ,
+	                                    "TCP_FLAGS" ,
+	                                    "PROTOCOL" ,
+                                        "SRC_TOS" ,
+	                                    "SRC_MASK" ,
+	                                    "DST_MASK" ,
+	                                    "DIRECTION"]
+                                rows.append([datetime.fromtimestamp(ts),client[0],6,
+                                                f.data['IPV6_SRC_ADDR'],
+                                                f.data['IPV6_DST_ADDR'], 
+                                                f.data['IPV6_NEXT_HOP'],
+                                                #f.data['BGP_IPV6_NEXT_HOP'],
+                                                f.data["IN_PKTS"],
+	                                            f.data["IN_BYTES"],
+	                                            datetime.fromtimestamp(f.data["FIRST_SWITCHED"]) ,
+	                                            datetime.fromtimestamp(f.data["LAST_SWITCHED"]) ,
+	                                            f.data["INPUT_SNMP"] ,
+	                                            f.data["OUTPUT_SNMP"] ,
+	                                            f.data["L4_SRC_PORT"] ,
+	                                            f.data["L4_DST_PORT"] ,
+	                                            f.data["SRC_AS"] ,
+	                                            f.data["DST_AS"] ,
+	                                            f.data["SRC_VLAN"] ,
+	                                            f.data["DST_VLAN"] ,
+	                                            f.data["TCP_FLAGS"] ,
+	                                            f.data["PROTOCOL"] ,
+                                                f.data["SRC_TOS"] ,
+	                                            f.data["IPV6_SRC_MASK"] ,
+	                                            f.data["IPV6_DST_MASK"] ,
+	                                            f.data["DIRECTION"] ])
+                                self.clickhouse_client.insert('raw_flows', rows, column_names)
+            except queue.Empty:
+                print("Fila vazia")
+            except Exception as ex:
+                self.erros.put(ex)
+            #print(list(self.export.queue))
+            #time.sleep(1)
 
     def __init__(self, host: str, port: int):
         logger.info("Starting the NetFlow listener on {}:{}".format(host, port))
+        self.export = queue.Queue()
         self.output = queue.Queue()
         self.input = queue.Queue()
+        self.erros = queue.Queue(maxsize=20)
         self.server = QueuingUDPListener((host, port), self.input)
         self.thread = threading.Thread(target=self.server.serve_forever)
-        self.thread.start()
+        
+        self.display_thread = Thread(target=self.displayFlows)
+        self.export_thread = Thread(target=self.exportFlows)
+        self.clickhouse_client = clickhouse_connect.get_client(host='172.20.99.121', username='default', password='Rz2010sql')
+        #self.display_thread.join()
         self._shutdown = threading.Event()
+        self.display_thread.start()
+        self.export_thread.start()
+        self.thread.start()
         super().__init__()
 
     def get(self, block=True, timeout=None) -> ParsedPacket:
@@ -156,6 +335,7 @@ class ThreadedNetFlowListener(threading.Thread):
                     to_retry.clear()
 
                 self.output.put(ParsedPacket(pkt.ts, pkt.client, export))
+                self.export.put(ParsedPacket(pkt.ts, pkt.client, export))
         finally:
             # Only reached when while loop ends
             self.server.shutdown()
@@ -168,6 +348,8 @@ class ThreadedNetFlowListener(threading.Thread):
     def join(self, timeout=None):
         self.thread.join(timeout=timeout)
         super().join(timeout=timeout)
+
+
 
 
 def get_export_packets(host: str, port: int) -> ParsedPacket:
@@ -195,12 +377,14 @@ def get_export_packets(host: str, port: int) -> ParsedPacket:
 if __name__ == "netflow.collector":
     logger.error("The collector is currently meant to be used as a CLI tool only.")
     logger.error("Use 'python3 -m netflow.collector -h' in your console for additional help.")
+displayQ = queue.Queue(maxsize=100)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="A sample netflow collector.")
     parser.add_argument("--host", type=str, default="0.0.0.0",
                         help="collector listening address")
-    parser.add_argument("--port", "-p", type=int, default=2055,
+    parser.add_argument("--port", "-p", type=int, default=4739,
                         help="collector listener port")
     parser.add_argument("--file", "-o", type=str, dest="output_file",
                         default="{}.gz".format(int(time.time())),
@@ -235,6 +419,7 @@ if __name__ == "__main__":
                 "flows": [flow.data for flow in export.flows]}
             }
             line = json.dumps(entry).encode() + b"\n"  # byte encoded line
+            
             with gzip.open(args.output_file, "ab") as fh:  # open as append, not reading the whole file
                 fh.write(line)
     except KeyboardInterrupt:
