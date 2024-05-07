@@ -87,6 +87,13 @@ formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
+logger.debug("antes ENVS")
+CLICKHOUSE_SERVER = os.getenv("CLICKHOUSE_SERVER", "172.20.99.121")
+CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
+CLICKHOUSE_PASS = os.getenv("CLICKHOUSE_PASS", "Rz2010sql")
+LISTEN_ADDRESS = os.getenv("LISTEN_ADDRESS", "0.0.0.0")
+LISTEN_PORT = os.getenv("LISTEN_PORT", 2055)
+logger.debug("apos ENVS")
 def getn(q, n):
     result = [q.get()]  # block until at least 1
     try:  # add more until `q` is empty or `n` items obtained
@@ -150,7 +157,7 @@ class ThreadedNetFlowListener(threading.Thread):
     """
     def displayFlows(self):
         while not self._shutdown.is_set():
-            os.system('cls' if os.name == 'nt' else 'clear')
+            #os.system('cls' if os.name == 'nt' else 'clear')
             print(datetime.now())
             print("NetFlows recebidos ("+ str(self.flows_recebidos)+")")
             print("NetFlows /s ("+ str(self.flows_per_second)+")")
@@ -159,10 +166,10 @@ class ThreadedNetFlowListener(threading.Thread):
             print("Flows V6 aguardando armazenamento ("+ str(self.store_v6.qsize())+"/"+ str(self.store_v6.maxsize) +")")
             print("Flows V6 armazenados ("+ str(self.flows_v6_salvos) +")")
             print("Erros: "+ str(self.erros.queue))
-            time.sleep(0.5)
+            time.sleep(5)
    
     def storeFlowsv4(self):
-        clickhouse_client = clickhouse_connect.get_client(host='172.20.99.121', username='default', password='Rz2010sql')
+        clickhouse_client = clickhouse_connect.get_client(host=CLICKHOUSE_SERVER, username=CLICKHOUSE_USER, password=CLICKHOUSE_PASS)
         while not self._shutdown.is_set():
             try:
               if not self.store_v4.full():
@@ -177,7 +184,7 @@ class ThreadedNetFlowListener(threading.Thread):
                 self.erros.put(ex)
                 continue
     def storeFlowsv6(self):
-        clickhouse_client = clickhouse_connect.get_client(host='172.20.99.121', username='default', password='Rz2010sql')
+        clickhouse_client = clickhouse_connect.get_client(host=CLICKHOUSE_SERVER, username=CLICKHOUSE_USER, password=CLICKHOUSE_PASS)
         while not self._shutdown.is_set():
             try:
               if not self.store_v6.full():
@@ -216,7 +223,7 @@ class ThreadedNetFlowListener(threading.Thread):
                 #     time.sleep(0.2)
                 #     continue
                 p = getn(self.export, self.export.qsize())
-                
+                agora = datetime.now()
                 if p:
                     for x in p:
                         timeStamp = datetime.fromtimestamp(x.export.header.timestamp) 
@@ -224,6 +231,10 @@ class ThreadedNetFlowListener(threading.Thread):
                         sysUptime = timedelta(0,0,x.export.header.uptime)
 
                         for f in x.export.flows:
+                            FIRST_SWITCHED_uptime = timedelta(0,0,f.data["FIRST_SWITCHED"])
+                            LAST_SWITCHED_uptime = timedelta(0,0,f.data["LAST_SWITCHED"])
+                            FIRST_SWITCHED = timeStamp - FIRST_SWITCHED_uptime
+                            LAST_SWITCHED = timeStamp - LAST_SWITCHED_uptime
                             if 'IPV4_SRC_ADDR' in f.data.keys():
                                 
                                 self.store_v4.put([datetime.fromtimestamp(ts),client[0],4,
@@ -233,8 +244,8 @@ class ThreadedNetFlowListener(threading.Thread):
                                                 f.data['BGP_IPV4_NEXT_HOP'],
                                                 f.data["IN_PKTS"] * sample_rate,
 	                                            f.data["IN_BYTES"]* sample_rate,
-	                                            timeStamp - timedelta(0,0,f.data["FIRST_SWITCHED"]) ,
-	                                            timeStamp - timedelta(0,0,f.data["LAST_SWITCHED"]) ,
+	                                            FIRST_SWITCHED ,
+	                                            LAST_SWITCHED ,
 	                                            f.data["INPUT_SNMP"] ,
 	                                            f.data["OUTPUT_SNMP"] ,
 	                                            f.data["L4_SRC_PORT"] ,
@@ -261,8 +272,8 @@ class ThreadedNetFlowListener(threading.Thread):
                                                 #f.data['BGP_IPV6_NEXT_HOP'],
                                                 f.data["IN_PKTS"]* sample_rate,
 	                                            f.data["IN_BYTES"]* sample_rate,
-	                                            timeStamp - timedelta(0,0,f.data["FIRST_SWITCHED"]) ,
-	                                            timeStamp - timedelta(0,0,f.data["LAST_SWITCHED"]) ,
+	                                            FIRST_SWITCHED ,
+	                                            LAST_SWITCHED ,
 	                                            f.data["INPUT_SNMP"] ,
 	                                            f.data["OUTPUT_SNMP"] ,
 	                                            f.data["L4_SRC_PORT"] ,
@@ -303,7 +314,9 @@ class ThreadedNetFlowListener(threading.Thread):
         self.output = queue.Queue()
         self.input = queue.Queue()
         self.erros = queue.Queue(maxsize=20)
-        self.server = QueuingUDPListener((host, port), self.input)
+        conn_info =  (LISTEN_ADDRESS, int(LISTEN_PORT))
+        self.server = QueuingUDPListener(conn_info, self.input)
+        
         self.thread = threading.Thread(target=self.server.serve_forever)
         
         self.display_thread = Thread(target=self.displayFlows)
